@@ -1,0 +1,210 @@
+---
+title: "Practical Machine Learning Assignment"
+output: html_notebook
+---
+
+Created by Hiran Hasanka 
+
+[GitHub](https://github.com/theSLWayne) 
+[Twitter](twitter.com/theSLWayne) 
+[LinkedIn](https://linkedin.com/in/hiran-hasanka) 
+[Medium](https://medium.com/@hiranhasanka)
+
+```{r}
+# Compiled on 3rd of June, 2020.
+# R version 4.0.0 (2020-04-24) -- "Arbor Day"
+
+```
+
+
+## Background on the Dataset
+
+> Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website [here](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+## Data
+
+> The training data for this project are available [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv).
+
+> The test data are available [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv).
+
+## Loading Datasets
+
+Package "readr" will be used for loading .csv files.
+
+```{r}
+library(readr)
+
+WL <- read_csv("data/pml-training.csv")
+WLTest <- read_csv("data/pml-testing.csv")
+```
+
+Trying to gain a basic understanding about what we're dealing with here.
+
+```{r}
+dim(WL)
+```
+
+So, We've got a dataset of about 20K records and 160 possible predictors.
+Since the models do not work well with missing values, I'm trying to find whether there are any predictors without a single missing value. I've used [this method](https://stackoverflow.com/questions/11330138/find-columns-with-all-missing-values/11330265#11330265) to find columns with at least one missing value.
+
+```{r}
+anyMissingVals <- sapply(WLTest, function(x) any(is.na(x) | x == ""))
+# Taking a look at possible predictors that do not have any missing values
+names(WLTest)[!anyMissingVals]
+```
+
+Looks like the predictors whose name include "belt", "dumbbell", "forearm" and "arm" do not have missing values. So I'm going to select those as predictors.
+
+```{r}
+isPred <- !anyMissingVals & grepl("belt|[^(fore)]arm|dumbbell|forearm", names(WLTest))
+preds <- names(WLTest)[isPred]
+preds
+```
+
+With that having done, I'm going to create a subset of the primary dataset including only "preds" columns and "classe" column.
+
+```{r}
+preds <- c("classe", preds)
+WL <- WL[, preds, with = F]
+dim(WL)
+```
+
+Taking a quick look at the new dataset
+
+```{r}
+sapply(WL, class)
+```
+
+
+Since the type of data in the "classe" column is character, I'll convert it to factors.
+
+```{r}
+WL$classe <- as.factor(WL$classe)
+class(WL$classe)
+```
+
+Splitting the dataset into 70% for training and 30% for probing datasets.
+
+```{r}
+library(caret)
+```
+```{r}
+inTrain <- createDataPartition(y = WL$classe, p = 0.7, list = F)
+WLTrain <- WL[inTrain,]
+WLProbe <- WL[-inTrain,]
+```
+
+Preprocessing (Centering and scaling) predictors
+```{r}
+temp <- WLTrain[, names(WLTest)[isPred], with = F]
+preProc <- preProcess(temp)
+preProc
+```
+
+
+```{r}
+library(data.table)
+tempCS <- predict(preProc, temp)
+WLTrainCS <- data.table(data.frame(classe = WLTrain$classe, tempCS))
+```
+
+Preprocessing the probing dataset.
+```{r}
+temp <- WLProbe[, names(WLTest)[isPred], with = F]
+tempCS <- predict(preProc, temp)
+WLProbeCS <- data.table(data.frame(classe = WLProbe$classe, tempCS))
+```
+
+Checking whether there are variables with near-zero variance
+```{r}
+nearZVals <- nearZeroVar(WLTrainCS, saveMetrics = T)
+if (any(nearZVals$nzv)) nzv
+```
+
+Since there are no variables with near zero variance, I'll move on to examine prediction variables. I'll group them and make them into histograms to try to understand the variance of each variable better.
+
+```{r}
+groupedHistos <- function (data, regex) {
+  col <- grep(regex, names(data))
+  col <- c(col, which(names(data) == "classe"))
+  require(reshape2)
+  n <- nrow(data)
+  DMelted <- melt(data[, col, with=FALSE][, rownum := seq(1, n)], id.vars=c("rownum", "classe"))
+  require(ggplot2)
+  ggplot(DMelted, aes(x=classe, y=value)) +
+    geom_violin(aes(color=classe, fill=classe), alpha=1/2) +
+    facet_wrap(~ variable, scale="free_y") +
+    scale_color_brewer(palette="Spectral") +
+    scale_fill_brewer(palette="Spectral") +
+    labs(x="", y="") +
+    theme(legend.position="none")
+}
+
+groupedHistos(WLTrainCS, "[^(fore)]arm")
+```
+
+```{r}
+groupedHistos(WLTrainCS, "belt")
+```
+
+```{r}
+groupedHistos(WLTrainCS, "dumbbell")
+```
+
+```{r}
+groupedHistos(WLTrainCS, "forearm")
+```
+
+
+## Training the prediction model
+```{r}
+ctrl <- trainControl(classProbs = T, savePredictions = T)
+trainedModel <- train(classe ~ ., data = WLTrainCS, method = "rf")
+```
+
+## Evaluating the Model on Training Dataset
+```{r}
+trainedModel
+```
+
+```{r}
+predTrain <- predict(trainedModel, WLTrainCS)
+confusionMatrix(predTrain, WLTrainCS$classe)
+```
+
+As you can see, the model did extremely well on the training dataset. Next, We'll look at the predictions it makes on the probing dataset.
+
+## Evaluating the Model on Probing Dataset.
+
+```{r}
+predProbe <- predict(trainedModel, WLProbeCS)
+confusionMatrix(predProbe, WLProbeCS$classe)
+```
+
+It did well with the probing dataset too.
+
+## The Final Model
+
+This shows the importance of variables in the random forest model that was trained.
+```{r}
+varImp(trainedModel)
+```
+
+```{r}
+trainedModel$finalModel
+```
+
+## Predicting on Test Dataset.
+
+The predictions recieved from this step is used to complete the quiz on Coursera.
+The data will be preprocessed by the same model that was used to preprocess the training and probing datasets.
+```{r}
+WLTestCS <- predict(preProc, WLTest[, names(WLTest)[isPred]], with = F)
+predTest <- predict(trainedModel, WLTestCS)
+predTest
+```
+
+
+## References
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th Augmented Human (AH) International Conference in cooperation with ACM SIGCHI (Augmented Human'13) . Stuttgart, Germany: ACM SIGCHI, 2013.
